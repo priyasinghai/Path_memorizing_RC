@@ -1,1 +1,226 @@
+#include <ESP8266WiFi.h>
+#include <ESP8266WebServer.h>
+#include <ArduinoOTA.h>
 
+// Motor pin definitions
+const int enA = D6;
+const int in1 = D2;
+const int in2 = D3;
+const int in3 = D4;
+const int in4 = D5;
+const int enB = D7;
+const int wifiLedPin = D0;
+
+ESP8266WebServer server(80);
+
+// WiFi credentials
+String sta_ssid = "Redmi";
+String sta_password = "DUBEYJI29";
+
+// Control variables
+String command = "";
+int SPEED = 1023;
+int speed_Coeff = 3;
+String instructions = "";
+String instructions1 = "";
+bool isrecording = true;
+int x = 0;
+int instsize = 0;
+
+// ---------- Motor Control Functions ----------
+void Forward() {
+  analogWrite(enA, SPEED);
+  digitalWrite(in1, HIGH);
+  digitalWrite(in2, LOW);
+  digitalWrite(in3, HIGH);
+  digitalWrite(in4, LOW);
+  analogWrite(enB, SPEED);
+  instructions += command;
+}
+
+void Backward() {
+  analogWrite(enA, SPEED);
+  digitalWrite(in1, LOW);
+  digitalWrite(in2, HIGH);
+  digitalWrite(in3, LOW);
+  digitalWrite(in4, HIGH);
+  analogWrite(enB, SPEED);
+  instructions += command;
+}
+
+void TurnLeft() {
+  analogWrite(enA, SPEED);
+  digitalWrite(in1, HIGH);
+  digitalWrite(in2, LOW);
+  digitalWrite(in3, LOW);
+  digitalWrite(in4, HIGH);
+  analogWrite(enB, SPEED);
+  instructions += command;
+}
+
+void TurnRight() {
+  analogWrite(enA, SPEED);
+  digitalWrite(in1, LOW);
+  digitalWrite(in2, HIGH);
+  digitalWrite(in3, HIGH);
+  digitalWrite(in4, LOW);
+  analogWrite(enB, SPEED);
+  instructions += command;
+}
+
+void Stop() {
+  analogWrite(enA, 0);
+  digitalWrite(in1, LOW);
+  digitalWrite(in2, LOW);
+  digitalWrite(in3, LOW);
+  digitalWrite(in4, LOW);
+  analogWrite(enB, 0);
+  instructions += command;
+}
+
+// ---------- WiFi and Setup ----------
+void setup() {
+  Serial.begin(115200);
+  pinMode(wifiLedPin, OUTPUT);
+  digitalWrite(wifiLedPin, HIGH);
+
+  pinMode(enA, OUTPUT);
+  pinMode(in1, OUTPUT);
+  pinMode(in2, OUTPUT);
+  pinMode(in3, OUTPUT);
+  pinMode(in4, OUTPUT);
+  pinMode(enB, OUTPUT);
+
+  Stop();
+
+  String chip_id = String(ESP.getChipId(), HEX);
+  chip_id = "wificar-" + chip_id.substring(chip_id.length() - 4);
+
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(sta_ssid.c_str(), sta_password.c_str());
+
+  Serial.print("Connecting to ");
+  Serial.println(sta_ssid);
+
+  unsigned long startAttempt = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - startAttempt < 10000) {
+    delay(500);
+    Serial.print(".");
+  }
+
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("\nWiFi-STA-Mode");
+    Serial.print("IP Address: ");
+    Serial.println(WiFi.localIP());
+    digitalWrite(wifiLedPin, LOW);
+  } else {
+    WiFi.mode(WIFI_AP);
+    WiFi.softAP(chip_id.c_str());
+    Serial.println("\nWiFi-AP-Mode");
+    Serial.print("AP IP Address: ");
+    Serial.println(WiFi.softAPIP());
+    digitalWrite(wifiLedPin, HIGH);
+  }
+
+  server.on("/", HTTP_handleRoot);
+  server.onNotFound(HTTP_handleRoot);
+  server.begin();
+
+  ArduinoOTA.begin();
+}
+
+// ---------- Main Loop ----------
+void loop() {
+  delay(125);
+  ArduinoOTA.handle();
+  server.handleClient();
+
+  if (isrecording) {
+    command = server.arg("State");
+
+    if (command == "F") Forward();
+    else if (command == "B") Backward();
+    else if (command == "R") TurnRight();
+    else if (command == "L") TurnLeft();
+    else if (command == "S") Stop();
+    else if (command == "V") {
+      isrecording = false;
+      instsize = instructions.length();
+      for (int j = instsize - 2; j >= 0; j--) {
+        if (instructions[j] == 'F') instructions1 += 'B';
+        else if (instructions[j] == 'B') instructions1 += 'F';
+        else if (instructions[j] == 'R') instructions1 += 'L';
+        else if (instructions[j] == 'L') instructions1 += 'R';
+      }
+      instructions1 += 'S';
+      instructions = "";
+      Serial.println("Received V");
+      Serial.println("Reversed Instructions: " + instructions1);
+    }
+    else if (command >= "0" && command <= "9") SPEED = 330 + (command.toInt() * 70);
+    else if (command == "q") SPEED = 1023;
+
+  } else {
+    if (x < instsize) {
+      char c = instructions1[x];
+      command = String(c);
+      if (c == 'F') Forward();
+      else if (c == 'B') Backward();
+      else if (c == 'R') TurnRight();
+      else if (c == 'L') TurnLeft();
+      else if (c == 'S') Stop();
+      x++;
+    } else {
+      x = 0;
+      instructions = "";
+      for (int j = instsize - 2; j >= 0; j--) {
+        if (instructions1[j] == 'F') instructions += 'B';
+        else if (instructions1[j] == 'B') instructions += 'F';
+        else if (instructions1[j] == 'R') instructions += 'L';
+        else if (instructions1[j] == 'L') instructions += 'R';
+      }
+      instructions += "S";
+      instructions1 = instructions;
+    }
+  }
+}
+
+// ---------- Web Handlers ----------
+void HTTP_handleRoot() {
+  
+  String html = R"rawliteral(
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <title>Robot Control</title>
+      <style>
+        body { font-family: Arial; text-align: center; margin-top: 50px; }
+        button { width: 100px; height: 50px; font-size: 20px; margin: 10px; }
+      </style>
+    </head>
+    <body>
+      <h1>WiFi Robot Controller</h1>
+      <div>
+        <button onclick="sendCmd('F')">Forward</button><br>
+        <button onclick="sendCmd('L')">Left</button>
+        <button onclick="sendCmd('S')">Stop</button>
+        <button onclick="sendCmd('R')">Right</button><br>
+        <button onclick="sendCmd('B')">Backward</button><br>
+        <button onclick="sendCmd('V')">Replay</button>
+      </div>
+      <script>
+        function sendCmd(cmd) {
+          fetch("/?State=" + cmd);
+        }
+      </script>
+    </body>
+    </html>
+  )rawliteral";
+
+  server.send(200, "text/html", html);
+
+  // Optional: print command in Serial if received
+  if (server.hasArg("State")) {
+    Serial.println("Received State: " + server.arg("State"));
+  }
+}
